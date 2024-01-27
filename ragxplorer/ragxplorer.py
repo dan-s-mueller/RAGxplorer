@@ -10,6 +10,7 @@ from typing import (
 from pydantic import BaseModel, Field
 import pandas as pd
 
+import chromadb
 from chromadb.utils.embedding_functions import (
     SentenceTransformerEmbeddingFunction,
     OpenAIEmbeddingFunction,
@@ -92,28 +93,43 @@ class RAGxplorer(BaseModel):
             except Exception as exc:
                 raise ValueError("Invalid embedding model. Please use all-MiniLM-L6-v2, or a valid OpenAI or HuggingFace embedding model.") from exc
 
-    def load_pdf(self, document_path: str, chunk_size: int = 1000, chunk_overlap: int = 0, verbose: bool = False):
+    def load_db(self, document_path: str = None, chunk_size: int = 1000, chunk_overlap: int = 0, path_to_db:str = None, index_name:str = None, verbose: bool = False):
         """
-        Load data from a PDF file and prepare it for exploration.
+        First checks for document_path to load data from a PDF file and prepare it for exploration. 
+        Else, if path_to_db exists, it will connect to the database instead of building it. 
         
         Args:
             document: Path to the PDF document to load.
             chunk_size: Size of the chunks to split the document into.
             chunk_overlap: Number of tokens to overlap between chunks.
+            path_to_db: Path to the database to connect to.
+            index_name: Name of the index to connect to.
         """
-        if verbose:
-            print(" ~ Building the vector database...")
-        self._vectordb = build_vector_database(document_path, chunk_size, chunk_overlap, self._chosen_embedding_model)
-        if verbose:
-            print("Completed Building Vector Database ✓")
+        if path_to_db is None:
+            if verbose:
+                print(" ~ Building the vector database...")
+            self._vectordb = build_vector_database(document_path, chunk_size, chunk_overlap, self._chosen_embedding_model)
+            if verbose:
+                print("Completed Building Vector Database ✓")
+        else:
+            if verbose:
+                print(" ~ Connecting to the vector database...")
+            client = chromadb.PersistentClient(path=path_to_db)            
+            self._vectordb = client.get_collection(name=index_name)
+            if verbose:
+                print("Connected to Vector Database ✓")
         self._documents.embeddings = get_doc_embeddings(self._vectordb)
         self._documents.text = get_docs(self._vectordb)
         self._documents.ids = self._vectordb.get()['ids']
         if verbose:
             print(" ~ Reducing the dimensionality of embeddings...")
         self._projector = set_up_umap(embeddings=self._documents.embeddings)
+        if verbose:
+            print('Set up UMAP transformer ✓')
         self._documents.projections = get_projections(embedding=self._documents.embeddings,
                                                       umap_transform=self._projector)
+        if verbose:
+            print('Got projections ✓')
         self._VizData.base_df = prepare_projections_df(document_ids=self._documents.ids,
                                                                 document_projections=self._documents.projections,
                                                                 document_text=self._documents.text)
