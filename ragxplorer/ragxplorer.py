@@ -2,6 +2,9 @@
 Ragxplorer.py
 """
 import os
+import uuid
+import random
+import json
 from typing import (
     Optional,
     Any
@@ -93,7 +96,11 @@ class RAGxplorer(BaseModel):
             except Exception as exc:
                 raise ValueError("Invalid embedding model. Please use all-MiniLM-L6-v2, or a valid OpenAI or HuggingFace embedding model.") from exc
 
-    def load_db(self, document_path: str = None, chunk_size: int = 1000, chunk_overlap: int = 0, path_to_db:str = None, index_name:str = None, verbose: bool = False):
+    def load_db(self, document_path: str = None, chunk_size: int = 1000, chunk_overlap: int = 0, 
+            path_to_db:str = None, index_name:str = None, 
+            df_export_path:str = None,
+            vector_qty: float = None,
+            verbose: bool = False):
         """
         First checks for document_path to load data from a PDF file and prepare it for exploration. 
         Else, if path_to_db exists, it will connect to the database instead of building it. 
@@ -104,6 +111,7 @@ class RAGxplorer(BaseModel):
             chunk_overlap: Number of tokens to overlap between chunks.
             path_to_db: Path to the database to connect to.
             index_name: Name of the index to connect to.
+            vector_qty: Number of vectors to build the database with. If blank, all vectors will be used.
         """
         if path_to_db is None:
             if verbose:
@@ -118,25 +126,68 @@ class RAGxplorer(BaseModel):
             self._vectordb = client.get_collection(name=index_name)
             if verbose:
                 print("Connected to Vector Database ✓")
+    
         self._documents.embeddings = get_doc_embeddings(self._vectordb)
         self._documents.text = get_docs(self._vectordb)
         self._documents.ids = self._vectordb.get()['ids']
+
+        if vector_qty is not None:
+            # Reduce the number of vectors
+            if verbose:
+                print(' ~ Reducing the number of vectors from '+str(len(self._documents.embeddings))+' to '+str(vector_qty)+'...')
+            indices = random.sample(range(len(self._documents.embeddings)), vector_qty)
+            id = str(uuid.uuid4())[:8]
+            temp_index_name=index_name+id
+            
+            # Create a temporary index with the reduced number of vectors
+            client.create_collection(name=temp_index_name)
+            temp_collection = client.get_collection(name=temp_index_name)
+            temp_collection.add(
+                ids=[self._documents.ids[i] for i in indices],
+                embeddings=[self._documents.embeddings[i] for i in indices],
+                documents=[self._documents.text[i] for i in indices]
+            )
+
+            # Replace the original index with the temporary one
+            self._vectordb = temp_collection
+            self._documents.embeddings = get_doc_embeddings(self._vectordb)
+            self._documents.text = get_docs(self._vectordb)
+            self._documents.ids = self._vectordb.get()['ids']
+            if verbose:
+                print('Reduced number of vectors to '+str(len(self._documents.embeddings))+' ✓')
+                print('Copy of database saved as '+temp_index_name+' ✓')
+
         if verbose:
             print(" ~ Reducing the dimensionality of embeddings...")
         self._projector = set_up_umap(embeddings=self._documents.embeddings)
         if verbose:
             print('Set up UMAP transformer ✓')
-        self._documents.projections = get_projections(embedding=self._documents.embeddings,
-                                                      umap_transform=self._projector)
         if verbose:
-            print('Got projections ✓')
+            print('~ Projecting data...')
+        self._documents.projections = get_projections(embedding=self._documents.embeddings,
+                                                    umap_transform=self._projector)
         self._VizData.base_df = prepare_projections_df(document_ids=self._documents.ids,
                                                                 document_projections=self._documents.projections,
                                                                 document_text=self._documents.text)
+        if df_export_path is not None:
+            # Save the parameters to a JSON file
+            # Get the parameters of the UMAP transformer and the DataFrame
+            export_data = {
+                'visualization_index_name' : temp_index_name if 'temp_index_name' in locals() else index_name,
+                'umap_params': self._projector.get_params(),
+                'viz_data': self._VizData.base_df.to_json(orient='split')
+            }
+
+            # Save the data to a JSON file
+            with open(df_export_path, 'w') as f:
+                json.dump(export_data, f, indent=4)
+
+            if verbose:
+                print("Exported flattened dataframe, and umap parameters for visualization ✓")
         if verbose:
             print("Completed reducing dimensionality of embeddings ✓")
 
-    def visualize_query(self, query: str, retrieval_method: str="naive", top_k:int=5, query_shape_size:int=5) -> go.Figure:
+    def visualize_query(self, query: str, retrieval_method: str="naive", top_k:int=5, query_shape_size:int=5,path_to_db:str = None, viz_data_df_path:pd.DataFrame=None, verbose:bool = False) -> go.Figure:
         """
         Visualize the query results in a 2D projection using Plotly.
 
@@ -152,8 +203,32 @@ class RAGxplorer(BaseModel):
         Raises:
             RuntimeError: If the document has not been loaded before visualization.
         """
-        if self._vectordb is None or self._VizData.base_df is None:
-            raise RuntimeError("Please load the pdf first.")
+        # Use the provided dataframe for projections, re-establish the projector with the same parameters, connect to database
+        if viz_data_df_path is not None: 
+            # Read the data from the JSON file
+            with open(viz_data_df_path, 'r') as f:
+                data = json.load(f)
+
+            # Connect to database
+            if verbose:
+                print(" ~ Connecting to the vector database...")
+            client = chromadb.PersistentClient(path=path_to_db)            
+            self._vectordb = client.get_collection(name=data['visualization_index_name'])
+            if verbose:
+                print("Connected to Vector Database ✓")
+
+            # Assign read in viz_data to the base_df
+            self._VizData.base_df = pd.read_json(data['viz_data'], orient='split')
+            if verbose:
+                print('Read in existing visualization data ✓')
+
+            # Get the parameters of the UMAP transformer and reassign to a new projector
+            self._projector = set_up_umap(embeddings=self._documents.embeddings, umap_params=data['umap_params'])
+            if verbose:
+                print('Set up UMAP transformer ✓')        
+        else:
+            if self._vectordb is None or self._VizData.base_df is None:
+                raise RuntimeError("Please load a pdf first.")
 
         self._query.original_query = query
 
