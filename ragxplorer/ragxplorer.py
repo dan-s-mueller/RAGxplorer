@@ -137,7 +137,7 @@ class RAGxplorer(BaseModel):
                 print(' ~ Reducing the number of vectors from '+str(len(self._documents.embeddings))+' to '+str(vector_qty)+'...')
             indices = random.sample(range(len(self._documents.embeddings)), vector_qty)
             id = str(uuid.uuid4())[:8]
-            temp_index_name=index_name+id
+            temp_index_name=index_name+'-'+id
             
             # Create a temporary index with the reduced number of vectors
             client.create_collection(name=temp_index_name)
