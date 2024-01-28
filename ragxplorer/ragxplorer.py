@@ -80,17 +80,20 @@ class RAGxplorer(BaseModel):
     def _set_embedding_model(self):
         """ Sets the embedding model """
         if self.embedding_model == 'all-MiniLM-L6-v2':
+            print('~ Setting all-MiniLM-L6-v2 embedding model...')
             self._chosen_embedding_model = SentenceTransformerEmbeddingFunction()
 
         elif self.embedding_model in OPENAI_EMBEDDING_MODELS:
             if "OPENAI_API_KEY" not in os.environ:
                 raise OSError("OPENAI_API_KEY is not set")
+            print('~ Setting openai embedding model: '+self.embedding_model+'...')
             self._chosen_embedding_model = OpenAIEmbeddingFunction(api_key = os.getenv("OPENAI_API_KEY"), 
                                                                    model_name = self.embedding_model)
         else:
             try:
                 if "HF_API_KEY" not in os.environ:
                     raise OSError("HF_API_KEY is not set")
+                print('~ Setting hf embedding model...')
                 self._chosen_embedding_model = HuggingFaceEmbeddingFunction(api_key = os.getenv("HF_API_KEY"),
                                                                             model_name = self.embedding_model)
             except Exception as exc:
@@ -123,7 +126,7 @@ class RAGxplorer(BaseModel):
             if verbose:
                 print(" ~ Connecting to the vector database...")
             client = chromadb.PersistentClient(path=path_to_db)            
-            self._vectordb = client.get_collection(name=index_name)
+            self._vectordb = client.get_collection(name=index_name,embedding_function=self._chosen_embedding_model)
             if verbose:
                 print("Connected to Vector Database ✓")
     
@@ -140,8 +143,8 @@ class RAGxplorer(BaseModel):
             temp_index_name=index_name+'-'+id
             
             # Create a temporary index with the reduced number of vectors
-            client.create_collection(name=temp_index_name)
-            temp_collection = client.get_collection(name=temp_index_name)
+            client.create_collection(name=temp_index_name,embedding_function=self._chosen_embedding_model)
+            temp_collection = client.get_collection(name=temp_index_name,embedding_function=self._chosen_embedding_model)
             temp_collection.add(
                 ids=[self._documents.ids[i] for i in indices],
                 embeddings=[self._documents.embeddings[i] for i in indices],
@@ -167,8 +170,8 @@ class RAGxplorer(BaseModel):
         self._documents.projections = get_projections(embedding=self._documents.embeddings,
                                                     umap_transform=self._projector)
         self._VizData.base_df = prepare_projections_df(document_ids=self._documents.ids,
-                                                                document_projections=self._documents.projections,
-                                                                document_text=self._documents.text)
+                                                       document_projections=self._documents.projections,
+                                                       document_text=self._documents.text)
         if df_export_path is not None:
             # Save the parameters to a JSON file
             # Get the parameters of the UMAP transformer and the DataFrame
@@ -213,9 +216,12 @@ class RAGxplorer(BaseModel):
             if verbose:
                 print(" ~ Connecting to the vector database...")
             client = chromadb.PersistentClient(path=path_to_db)            
-            self._vectordb = client.get_collection(name=data['visualization_index_name'])
+            self._vectordb = client.get_collection(name=data['visualization_index_name'],embedding_function=self._chosen_embedding_model)
             if verbose:
-                print("Connected to Vector Database ✓")
+                print("Reconnected to Vector Database ✓")
+            self._documents.embeddings = get_doc_embeddings(self._vectordb)
+            self._documents.text = get_docs(self._vectordb)
+            self._documents.ids = self._vectordb.get()['ids']
 
             # Assign read in viz_data to the base_df
             self._VizData.base_df = pd.read_json(data['viz_data'], orient='split')
@@ -233,11 +239,19 @@ class RAGxplorer(BaseModel):
         self._query.original_query = query
 
         if (self.embedding_model == "all-MiniLM-L6-v2") or (self.embedding_model in OPENAI_EMBEDDING_MODELS):
-            self._query.original_query_projection = get_projections(embedding=self._chosen_embedding_model(self._query.original_query),
-                                                                umap_transform=self._projector)
+            if verbose:
+                print("~ Embedding model all-MiniLM-L6-v2 or OpenAI: "+str(self._chosen_embedding_model))
+            self._query.original_query_projection = get_projections(embedding=self._chosen_embedding_model([self._query.original_query]),
+                                                                    umap_transform=self._projector)
+            if verbose:
+                print("Query projection completed ✓")
         else:
+            if verbose:
+                print("~ Embedding model not all-MiniLM-L6-v2 or OpenAI: "+str(self._chosen_embedding_model))
             self._query.original_query_projection = get_projections(embedding=[self._chosen_embedding_model(self._query.original_query)],
                                                                     umap_transform=self._projector)
+            if verbose:
+                print("Query projection completed ✓")
 
         self._VizData.query_df = pd.DataFrame({"x": [self._query.original_query_projection[0][0]],
                                       "y": [self._query.original_query_projection[1][0]],
@@ -258,12 +272,17 @@ class RAGxplorer(BaseModel):
                 raise OSError("OPENAI_API_KEY is not set")
             self._query.actual_search_queries = generate_sub_qn(query=self._query.original_query)
 
+        if verbose:
+            print("~ Querying database...")
         self._query.retrieved_docs = query_chroma(chroma_collection=self._vectordb,
-                                            query=self._query.actual_search_queries,
-                                            top_k=top_k)
+                                                  query=self._query.actual_search_queries,
+                                                  top_k=top_k)
 
+        if verbose:
+            print("~ Preparing query data for visualization...")
         self._VizData.base_df.loc[self._VizData.base_df['id'].isin(self._query.retrieved_docs), "category"] = "Retrieved"
-            
+        
         self._VizData.visualisation_df = pd.concat([self._VizData.base_df, self._VizData.query_df], axis = 0)
-
+        if verbose:
+            print("Plot generated ✓")
         return plot_embeddings(self._VizData.visualisation_df)

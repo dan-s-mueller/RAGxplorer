@@ -26,7 +26,7 @@ PLOT_SIZE = 3
 VISUALISATION_SETTINGS = {
     'Original Query': {'color': 'red', 'opacity': 1, 'symbol': 'cross', 'size': 15},
     'Retrieved': {'color': 'green', 'opacity': 1, 'symbol': 'circle', 'size': 10},
-    'Chunks': {'color': 'blue', 'opacity': 0.4, 'symbol': 'circle', 'size': 10},
+    'Chunks': {'color': 'orange', 'opacity': 0.4, 'symbol': 'circle', 'size': 10},
     'Sub-Questions': {'color': 'purple', 'opacity': 1, 'symbol': 'star', 'size': 15},
     'Hypothetical Ans': {'color': 'purple', 'opacity': 1, 'symbol': 'star', 'size': 15},
 }
