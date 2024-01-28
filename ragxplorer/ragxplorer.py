@@ -103,6 +103,7 @@ class RAGxplorer(BaseModel):
             path_to_db:str = None, index_name:str = None, 
             df_export_path:str = None,
             vector_qty: float = None,
+            umap_params: dict = None,
             verbose: bool = False):
         """
         First checks for document_path to load data from a PDF file and prepare it for exploration. 
@@ -162,7 +163,8 @@ class RAGxplorer(BaseModel):
 
         if verbose:
             print(" ~ Reducing the dimensionality of embeddings...")
-        self._projector = set_up_umap(embeddings=self._documents.embeddings)
+        self._projector = set_up_umap(embeddings=self._documents.embeddings,
+                                      umap_params=umap_params)
         if verbose:
             print('Set up UMAP transformer ✓')
         if verbose:
@@ -229,7 +231,8 @@ class RAGxplorer(BaseModel):
                 print('Read in existing visualization data ✓')
 
             # Get the parameters of the UMAP transformer and reassign to a new projector
-            self._projector = set_up_umap(embeddings=self._documents.embeddings, umap_params=data['umap_params'])
+            self._projector = set_up_umap(embeddings=self._documents.embeddings, 
+                                          umap_params=data['umap_params'])
             if verbose:
                 print('Set up UMAP transformer ✓')        
         else:
